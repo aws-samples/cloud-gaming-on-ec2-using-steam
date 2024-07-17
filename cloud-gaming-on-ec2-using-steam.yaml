@@ -1,0 +1,579 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploy a Windows Server instance pre-configured with Steam gaming platform. This template sets up a Windows EC2 instance with the Steam client installed, ready for gaming. ( https://github.com/aws-samples/cloud-gaming-on-ec2-using-steam )
+
+Metadata:
+  License:
+    Description: >
+      Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+      SPDX-License-Identifier: MIT-0
+
+      Permission is hereby granted, free of charge, to any person obtaining a copy of this
+      software and associated documentation files (the "Software"), to deal in the Software
+      without restriction, including without limitation the rights to use, copy, modify,
+      merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+      permit persons to whom the Software is furnished to do so.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+      INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+      HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+      SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: AMI ID
+        Parameters:
+          - imageId
+      - Label:
+          default: EC2
+        Parameters:
+          - ec2Name
+          - instanceType
+      - Label:
+          default: Network
+        Parameters:
+          - vpcID
+          - subnetID
+          - displayPublicIP
+          - assignStaticIP
+      - Label:
+          default: Allowed source IP
+        Parameters:
+          - ingressIPv4
+      - Label:
+          default: EBS volume
+        Parameters:
+          - volumeSize
+          - volumeType
+
+Parameters:
+  imageId:
+    Description: AMI ID ( aws ssm get-parameters-by-path --path /aws/service/ami-windows-latest --query "Parameters[].Name" )
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base
+
+  ec2Name:
+    Type: String
+    Description: EC2 instance name
+    Default: Windows Server-GAMING
+  instanceType:
+    Description: Instance type (https://aws.amazon.com/ec2/instance-types/g5/)
+    Type: String
+    AllowedValues:
+      - g5.xlarge
+      - g5.2xlarge
+      - g5.4xlarge
+      - g5.8xlarge
+      - g5.16xlarge
+    ConstraintDescription: Specify a valid EC2 instance type (g5.*)
+    Default: g5.2xlarge
+
+  vpcID:
+    Type: AWS::EC2::VPC::Id
+    Description: "VPC with internet connectivity ( https://console.aws.amazon.com/vpcconsole/home#vpcs: )"
+    AllowedPattern: ".+"
+    ConstraintDescription: Select a VPC
+  subnetID:
+    Type: AWS::EC2::Subnet::Id
+    Description: "Subnet with internet connectivity ( https://console.aws.amazon.com/vpcconsole/home#subnets: )"
+    AllowedPattern: ".+"
+    ConstraintDescription: Select a Subnet
+  displayPublicIP:
+    Type: String
+    Description: Display EC2 public IP in CloudFormation Outputs (select No if EC2 has no public IP)
+    AllowedValues:
+      - "Yes"
+      - "No"
+    Default: "Yes"
+  assignStaticIP:
+    Type: String
+    Description: Associate static public IPv4 address ( https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html )
+    AllowedValues:
+      - "Yes"
+      - "No"
+    Default: "No"
+
+  ingressIPv4:
+    Type: String
+    Description: Allowed source IP address or prefix for RDP connection (IPv4) (e.g., 1.2.3.4/32, get your source IP from https://checkip.amazonaws.com)
+    AllowedPattern: "^\\d+\\.\\d+\\.\\d+\\.\\d+\\/\\d+$"
+    ConstraintDescription: Specify valid IPv4 prefix
+    Default: 0.0.0.0/32
+
+  volumeSize:
+    Type: Number
+    Description: Volume size in GiB
+    MinValue: 30
+    MaxValue: 16384
+    Default: 550
+  volumeType:
+    Type: String
+    Description: EBS volume type
+    AllowedValues:
+      - "gp3"
+      - "gp2"
+    Default: "gp3"
+
+Conditions:
+  useElasticIP: !Equals [!Ref assignStaticIP, "Yes"]
+  displayPublicIP: !Equals [!Ref displayPublicIP, "Yes"]
+
+Resources:
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow inbound RDP
+      VpcId: !Ref vpcID
+      SecurityGroupIngress:
+        - Description: RDP (IPv4)
+          IpProtocol: "tcp"
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: !Ref ingressIPv4
+      SecurityGroupEgress:
+        - Description: Allow all outbound traffic (IPv4)
+          IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+        - Description: Allow all outbound traffic (IPv6)
+          IpProtocol: "-1"
+          CidrIpv6: ::/0
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: StackId
+          Value: !Sub ${AWS::StackId}
+        - Key: Name
+          Value: !Sub "[${AWS::StackName}] - ${ec2Name}"
+        - Key: GitHub
+          Value: https://github.com/aws-samples/cloud-gaming-on-ec2-using-steam
+
+  instanceIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ec2.amazonaws.com]
+            Action: ["sts:AssumeRole"]
+      Path: /
+      Policies:
+        - PolicyName: gpuDrivers
+          PolicyDocument: # https://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/install-nvidia-driver.html
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:List*
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::nvidia-gaming"
+                  - !Sub "arn:${AWS::Partition}:s3:::nvidia-gaming/*"
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: StackId
+          Value: !Sub ${AWS::StackId}
+        - Key: GitHub
+          Value: https://github.com/aws-samples/cloud-gaming-on-ec2-using-steam
+
+  instanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref instanceIamRole
+
+  Ec2InstanceLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+        LaunchTemplateData:
+          MetadataOptions:
+            HttpEndpoint: enabled
+            HttpPutResponseHopLimit: 1
+            HttpTokens: required
+
+  ec2Instance:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT90M
+    Metadata:
+      Comment: Install Update files
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - config1
+            - config2
+            - config3
+        config1:
+          files:
+            c:\\Users\\Administrator\\update-awscli.cmd:
+              content: |
+                @echo off
+                aws --version
+                C:\ProgramData\chocolatey\bin\choco upgrade -y awscli
+                aws --version
+            c:\\Users\\Administrator\\download-NVIDIA-Gaming-driver.cmd:
+              content: |
+                @echo off
+                cls
+                @echo.
+                @echo NOTICE: These downloads are for GPU instances and are available to AWS customers only
+                @echo.
+                @echo By downloading, you agree to conditions and are bound by license terms as stated on
+                @echo   https://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/install-nvidia-driver.html
+                @echo.
+                pause
+                @echo Downloading drivers...
+                if not exist "C:\Users\Administrator\Downloads\Drivers" md "C:\Users\Administrator\Downloads\Drivers"
+                cd C:\Users\Administrator\Downloads\Drivers
+                cd
+                "C:\Program Files\Amazon\AWSCLIV2\aws" s3 cp --recursive s3://nvidia-gaming/windows/latest/ .
+                IF %ERRORLEVEL% NEQ 0 "C:\Program Files\Amazon\AWSCLIV2\aws" s3 cp --recursive s3://nvidia-gaming/windows/latest/ . --region us-east-1
+                reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global" /v vGamingMarketplace /t REG_DWORD /d 2 /f
+                reg add "HKLM\SOFTWARE\NVIDIA Corporation\Global" /v vGamingMarketplace /t REG_DWORD /d 2
+                powershell -command "(New-Object System.Net.WebClient).DownloadFile('https://nvidia-gaming.s3.amazonaws.com/GridSwCert-Archive/GridSwCertWindows_2023_9_22.cert', 'C:\Users\Public\Documents\GridSwCert.txt')"
+                cd
+            c:\\windows\\temp\\setup.ps1:
+              content: !Sub |
+                # Check if marker file exists
+                $markerFile = "C:\windows\temp\setup_completed.marker"
+                                
+                if (-not (Test-Path $markerFile)) {
+                # Install Amazon SSM Agent
+                Write-Output "** https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-install-win.html"
+                Invoke-WebRequest -Uri "https://amazon-ssm-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/windows_amd64/AmazonSSMAgentSetup.exe" -OutFile "C:\windows\temp\AmazonSSMAgentSetup.exe"
+                # Install Amazon SSM Agent silently
+                Start-Process -FilePath "C:\windows\temp\AmazonSSMAgentSetup.exe" -ArgumentList "/S" -Wait
+                    
+                # Install Chocolatey
+                Write-Output "** https://docs.chocolatey.org/en-us/choco/setup"
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+                $chocoScript = (New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')
+                Invoke-Command -ScriptBlock ([ScriptBlock]::Create($chocoScript))
+                # Add Chocolatey to the PATH
+                $ALLUSERSPROFILE = $env:AllUsersProfile
+                $env:Path += ";$ALLUSERSPROFILE\chocolatey\bin"
+                                
+                # Install AWS CLI using Chocolatey
+                Write-Output "** install AWSCLI"
+                choco install --no-progress -y awscli
+                # Set environment variable AWS_CLI_AUTO_PROMPT for all users
+                [Environment]::SetEnvironmentVariable("AWS_CLI_AUTO_PROMPT", "on-partial", [EnvironmentVariableTarget]::Machine)
+                                
+                # Install VBCABLE driver
+                Write-Output "Downloading VBCABLE driver..."
+                Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip" -OutFile "C:\windows\temp\VBCABLE_Driver_Pack43.zip"
+                # Extract the ZIP file
+                Expand-Archive -Path "C:\windows\temp\VBCABLE_Driver_Pack43.zip" -DestinationPath "C:\windows\temp\VBCABLE_Driver_Pack43"
+                # Run the VBCABLE installer
+                $pathToCatFile = "C:\windows\temp\VBCABLE_Driver_Pack43\vbaudio_cable64_win7.cat"
+                $FullCertificateExportPath = "C:\windows\temp\VBCABLE_Driver_Pack43\VBCert.cer"
+                $VB = @{}
+                $VB.DriverFile = $pathToCatFile;
+                $VB.CertName = $FullCertificateExportPath;
+                $VB.ExportType = [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert;
+                $VB.Cert = (Get-AuthenticodeSignature -filepath $VB.DriverFile).SignerCertificate;
+                [System.IO.File]::WriteAllBytes($VB.CertName, $VB.Cert.Export($VB.ExportType))
+                Import-Certificate -CertStoreLocation Cert:\LocalMachine\TrustedPublisher -FilePath $VB.CertName | Out-Null
+                Start-Process -FilePath "C:\windows\temp\VBCABLE_Driver_Pack43\VBCABLE_Setup_x64.exe" -ArgumentList "-i","-h" -NoNewWindow -Wait
+                Set-Service -Name audiosrv -StartupType Automatic
+                Start-Service -Name audiosrv 
+                # Check the OS type
+                $osType = Get-CimInstance -ClassName Win32_OperatingSystem
+                # Apply Audio service fix for Windows Server
+                if ($osType.ProductType -eq 3) {
+                    Write-Output "Applying Audio service fix for Windows Server..."
+                    New-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control" -Name "ServicesPipeTimeout" -Value 600000 -PropertyType "DWord" | Out-Null
+                    Set-Service -Name Audiosrv -StartupType Automatic | Out-Null
+                }
+                                
+                # Install Steam
+                Write-Output "** Installing Steam"
+                Invoke-WebRequest -Uri "https://steamcdn-a.akamaihd.net/client/installer/SteamSetup.exe" -OutFile "C:\windows\temp\SteamSetup.exe"
+                Start-Process -FilePath "C:\windows\temp\SteamSetup.exe" -ArgumentList "/S" -Wait
+                                
+                # Install Nvidia Driver
+                # Set the target directory
+                $targetDirectory = "C:\Windows\Temp\driver"
+                # Create the target directory if it doesn't exist
+                New-Item -ItemType Directory -Force -Path $targetDirectory
+                # Output information
+                Write-Output "** https://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/install-nvidia-driver.html#nvidia-gaming-driver"
+                # Copy files from S3 bucket using AWS CLI directly to the target directory
+                Start-Process -FilePath "C:\Program Files\Amazon\AWSCLIV2\aws.exe" -ArgumentList "s3 cp --recursive s3://nvidia-gaming/windows/latest/ $targetDirectory --region us-east-1" -NoNewWindow -Wait 
+                # Add registry keys
+                reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global" /v vGamingMarketplace /t REG_DWORD /d 2 /f
+                reg add "HKLM\SOFTWARE\NVIDIA Corporation\Global" /v vGamingMarketplace /t REG_DWORD /d 2 /f
+                # Download certificates using PowerShell
+                (New-Object System.Net.WebClient).DownloadFile('https://nvidia-gaming.s3.amazonaws.com/GridSwCert-Archive/GridSwCertWindows_2023_9_22.cert', 'C:\Users\Public\Documents\GridSwCert.txt')
+                (New-Object System.Net.WebClient).DownloadFile('https://nvidia-gaming.s3.amazonaws.com/GridSwCert-Archive/GridSwCertWindows_2023_9_22.cert', 'C:\Users\Public\Documents\GridSwCertWindows_2023_9_22.txt')
+                (New-Object System.Net.WebClient).DownloadFile('https://nvidia-gaming.s3.amazonaws.com/GridSwCert-Archive/GridSwCert-Windows_2020_04.cert', 'C:\Users\Public\Documents\GridSwCert-Windows_2020_04.txt')
+                (New-Object System.Net.WebClient).DownloadFile('https://nvidia-gaming.s3.amazonaws.com/GridSwCert-Archive/GridSwCert-Windows_2019_09.cert', 'C:\Users\Public\Documents\GridSwCert-Windows_2019_09.txt')
+                # Check if the driver file is a ZIP
+                $VideoDriverFileExt = (Get-ChildItem -Path $targetDirectory -Filter * | Select-Object -First 1).Extension.TrimStart('.')
+                if ($VideoDriverFileExt -eq 'ZIP') {
+                    # Extract the ZIP file
+                    Expand-Archive -Path "$targetDirectory\*" -DestinationPath "$targetDirectory\Drivers"
+                    $InstallPath = Get-ChildItem -Path "$targetDirectory\Drivers\Windows\*.exe" | Select-Object -First 1
+                }
+                else {
+                    # Use the first .exe file directly
+                    $InstallPath = Get-ChildItem -Path $targetDirectory -Filter *.exe | Select-Object -First 1
+                }
+                # Display the install path
+                Write-Output "Install Path: $($InstallPath.FullName)"
+                # Check if InstallPath is not null
+                if ($null -ne $InstallPath) {
+                    # Perform the installation
+                    $ExitCode = (Start-Process -FilePath $($InstallPath.FullName) -ArgumentList "/s","/clean" -NoNewWindow -Wait -PassThru).ExitCode
+                    # Check the exit code
+                    if ($ExitCode -eq 0) {
+                        Write-Output "Installation successful."
+                        displayswitch.exe /external
+                        Start-Sleep -Seconds 10
+                    } else {
+                        Write-Output "Installation failed with exit code: $ExitCode."
+                    }
+                } else {
+                    Write-Output "Installation path not found. Aborting installation."
+                } 
+                
+                # Install SRE
+                Write-Output "** Installing SRE"
+                $urlSRE = "https://www.monitortests.com/download/sre/sre-1.0.zip"
+                $urlCRU = "https://www.monitortests.com/download/cru/cru-1.5.2.zip"
+                $destination = "C:\windows\temp"
+                Invoke-WebRequest -Uri $urlSRE -OutFile "$destination\sre-1.0.zip"
+                Invoke-WebRequest -Uri $urlCRU -OutFile "$destination\cru-1.5.2.zip"
+                Expand-Archive -Path "$destination\sre-1.0.zip" -DestinationPath "$destination\Scaled Resolution Editor" -Force
+                Expand-Archive -Path "$destination\cru-1.5.2.zip" -DestinationPath "$destination\cru" -Force
+                Copy-Item -Path "$destination\cru\restart64.exe" -Destination "$destination\Scaled Resolution Editor" -Force
+                $readmeContent = @"
+                Run SRE.exe. A UAC prompt may appear because it needs permission to access the registry.
+                Select a GPU from the drop-down list. The first active GPU is selected automatically. "*" means changes were saved.
+                Edit the resolution list as desired.
+                Click "OK" to save the changes.
+                Reboot (or run restart64.exe from CRU).
+                "@
+                Set-Content -Path "$destination\Scaled Resolution Editor\readme.txt" -Value $readmeContent
+                Move-Item -Path "$destination\Scaled Resolution Editor" -Destination "C:\Users\Administrator\Desktop\" -Force
+                                
+                # Register Task schedule for switch to console (RDP Fix)
+                $taskXml = @"
+                <?xml version="1.0" encoding="UTF-16"?>
+                <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+                    <RegistrationInfo>
+                    <Date>2024-03-16T00:27:45.3417289</Date>
+                    <Author>Administrator</Author>
+                    <URI>\na</URI>
+                    </RegistrationInfo>
+                    <Triggers>
+                    <EventTrigger>
+                        <Enabled>true</Enabled>
+                        <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-TerminalServices-LocalSessionManager/Operational"&gt;&lt;Select Path="Microsoft-Windows-TerminalServices-LocalSessionManager/Operational"&gt;*[System[Provider[@Name='Microsoft-Windows-TerminalServices-LocalSessionManager'] and EventID=24]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+                    </EventTrigger>
+                    </Triggers>
+                    <Principals>
+                    <Principal id="Author">
+                        <UserId>SYSTEM</UserId>
+                        <LogonType>InteractiveToken</LogonType>
+                        <RunLevel>LeastPrivilege</RunLevel>
+                    </Principal>
+                    </Principals>
+                    <Settings>
+                    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+                    <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
+                    <StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>
+                    <AllowHardTerminate>true</AllowHardTerminate>
+                    <StartWhenAvailable>false</StartWhenAvailable>
+                    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+                    <IdleSettings>
+                        <StopOnIdleEnd>true</StopOnIdleEnd>
+                        <RestartOnIdle>false</RestartOnIdle>
+                    </IdleSettings>
+                    <AllowStartOnDemand>true</AllowStartOnDemand>
+                    <Enabled>true</Enabled>
+                    <Hidden>false</Hidden>
+                    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+                    <WakeToRun>false</WakeToRun>
+                    <ExecutionTimeLimit>PT72H</ExecutionTimeLimit>
+                    <Priority>7</Priority>
+                    </Settings>
+                    <Actions Context="Author">
+                    <Exec>
+                        <Command>C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe</Command>
+                        <Arguments>-ExecutionPolicy Bypass -File "C:\windows\Scripts\SwitchToConsole.ps1"</Arguments>
+                    </Exec>
+                    </Actions>
+                </Task>
+                "@
+                Register-ScheduledTask -Xml $taskXml -TaskName "SwitchToConsole"
+                                
+                # Create marker file to indicate setup completion
+                New-Item -ItemType file -Path $markerFile -Force
+                } else {
+                Write-Output "Setup already completed. Skipping."
+                }
+            c:\\windows\\temp\\postinstall.ps1:
+              content: !Sub |
+                # Change resolution
+                Write-Output "Disabling HyperV Monitor and non-NVIDIA GPUs..."
+                Get-PnpDevice -Class "Display" -Status OK | Where-Object { $_.Name -notmatch "nvidia" } | Disable-PnpDevice -confirm:$false
+                Start-Sleep -Seconds 2
+                displayswitch.exe /internal
+                Start-Sleep -Seconds 2
+                Write-Output "Disabled."
+                Write-Output "Setting resolution to 1080p."
+                Set-DisplayResolution -Width 1920 -Height 1080 -Force
+            c:\\windows\\Scripts\\SwitchToConsole.ps1:
+              content: !Sub |
+                # Define the debug flag
+                $debug = $false  # Set this to $false if debug is not enabled
+                # Define the event log name and query for connection events
+                $connectionEventLogName = "Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational"
+                $connectionQuery = @"
+                    <QueryList>
+                        <Query Path="$connectionEventLogName">
+                            <Select Path="$connectionEventLogName">*[System[Provider[@Name='Microsoft-Windows-TerminalServices-RemoteConnectionManager'] and EventID=1149]]</Select>
+                        </Query>
+                    </QueryList>
+                "@
+                
+                # Calculate the time threshold 3 seconds ago
+                $timeThreshold = (Get-Date).AddSeconds(-3)
+                
+                # Get recent connection events
+                $recentConnectionEvents = Get-WinEvent -FilterXml $connectionQuery | Where-Object {$_.TimeCreated -ge $timeThreshold}
+                
+                # Check if any recent connection events occurred
+                if ($recentConnectionEvents) {
+                    # Recent connection event detected, skipping script execution
+                    if ($debug) {
+                        Write-Output "Skipping script execution: Recent connection event detected."
+                    }
+                } else {
+                    # No recent connection events, proceed to execute the script
+                    # Define the event log name and query
+                    $eventLogName = "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational"
+                $query = @"
+                    <QueryList>
+                        <Query Path="$eventLogName">
+                            <Select Path="$eventLogName">*[System[Provider[@Name='Microsoft-Windows-TerminalServices-LocalSessionManager'] and EventID=24]]</Select>
+                        </Query>
+                    </QueryList>
+                "@
+                
+                    # Get the latest disconnect event
+                    $latestEvent = Get-WinEvent -FilterXml $query -MaxEvents 1
+                
+                    # Extract session ID from the event data
+                    $sessionID = $latestEvent.Properties[1].Value
+                
+                    # Log file path
+                    $logFilePath = "C:\Windows\Temp\SessionReconnect_Log.txt"
+                
+                    if ($debug) {
+                        # Write initial log message
+                        "---------------------------" | Out-File -FilePath $logFilePath -Append
+                        "Script started at: $(Get-Date)" | Out-File -FilePath $logFilePath -Append
+                        "Latest disconnect event session ID: $sessionID" | Out-File -FilePath $logFilePath -Append
+                        # Reconnect session to console using tscon.exe
+                        "Reconnecting session $sessionID to console" | Out-File -FilePath $logFilePath -Append
+                    }
+                    Start-Process -FilePath "tscon.exe" -ArgumentList "$sessionID /dest:console" -NoNewWindow -Wai
+                    if ($debug) {
+                        # Write final log message
+                        "Session reconnected to console" | Out-File -FilePath $logFilePath -Append
+                        "Script ended at: $(Get-Date)" | Out-File -FilePath $logFilePath -Append
+                        "---------------------------" | Out-File -FilePath $logFilePath -Append
+                    }
+                }
+            c:\\Users\\Administrator\\Desktop\\end_rdp_session.cmd:
+              content: |
+                @echo off
+                tscon %sessionname% /dest:console
+        config2:
+          commands:
+            0-setup:
+              command: powershell.exe -ExecutionPolicy Unrestricted C:\windows\temp\setup.ps1
+              ignoreErrors: true
+              waitAfterCompletion: '0'
+            02-restart:
+              command: powershell.exe -Command Restart-Computer
+              waitAfterCompletion: forever
+        config3:
+          commands:
+            03-post-install:
+              command: powershell.exe -ExecutionPolicy Unrestricted C:\windows\temp\postinstall.ps1
+              waitAfterCompletion: '0'
+            04-signal-resource:
+                command: !Sub >
+                  cfn-signal.exe -e %ERRORLEVEL% --resource ec2Instance --stack ${AWS::StackName} --region ${AWS::Region}
+    Properties:
+      ImageId: !Ref imageId
+      InstanceType: !Ref instanceType
+      IamInstanceProfile: !Ref instanceProfile
+      SubnetId: !Ref subnetID
+      Monitoring: true
+      DisableApiTermination: true
+      SecurityGroupIds:
+        - !Ref securityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: !Ref volumeType
+            VolumeSize: !Ref volumeSize
+            DeleteOnTermination: true
+            Encrypted: true
+      LaunchTemplate:
+        LaunchTemplateId: !Ref 'Ec2InstanceLaunchTemplate'
+        Version: !GetAtt 'Ec2InstanceLaunchTemplate.LatestVersionNumber'
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          cfn-init.exe -v --stack ${AWS::StackId} --resource ec2Instance --region ${AWS::Region} --configsets setup
+          </powershell>
+      Tags:
+        - Key: Name
+          Value: !Ref ec2Name
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: StackId
+          Value: !Sub ${AWS::StackId}
+        - Key: GitHub
+          Value: https://github.com/aws-samples/cloud-gaming-on-ec2-using-steam
+
+  elasticIP:
+    Condition: useElasticIP
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      NetworkBorderGroup: !Ref AWS::Region
+      InstanceId: !Ref ec2Instance
+      Tags:
+        - Key: StackName
+          Value: !Sub ${AWS::StackName}
+        - Key: StackId
+          Value: !Sub ${AWS::StackId}
+        - Key: Name
+          Value: !Sub "[${AWS::StackName}] - ${ec2Name}"
+        - Key: GitHub
+          Value: https://github.com/aws-samples/cloud-gaming-on-ec2-using-steam
+
+Outputs:
+  SSMsessionManager:
+    Description: SSM Session Manager ("net user administrator <MyStr@ngAdminPassw0rd>" to change administrator password)
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/systems-manager/session-manager/${ec2Instance}"
+
+  RDPconnect:
+    Description: RDP (Remote Desktop Protocol) access via Fleet Manager
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/systems-manager/managed-instances/rdp-connect?region=${AWS::Region}&instances=${ec2Instance}"
+
+  EC2console:
+    Description: EC2 console
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/ec2/home?region=${AWS::Region}#Instances:search=${ec2Instance}"
