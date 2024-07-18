@@ -73,22 +73,22 @@ The key components of this solution are described in the following list.
 12. Additionally, you have the option to adjust settings to enhance game streaming performance, though this step is optional. Below, we've outlined the settings that typically yield the best framerate with our configuration. Feel free to experiment and customize them to suit your preferences.
     1. On the Amazon EC2 instance:
         1. go to Steam > Settings > Remote Play > Enable Advanced Host Options
-            1. \[√\] Change desktop resolution to match streaming client.
-            2. \[ \] Dynamically adjust capture resolution to improve client
-            3. \[ \] Use NVFBC capture on NVIDIA GPU
-            4. \[√\] Enable hardware encoding
-            5. \[√\] Enable hardware encoding on NVIDIA GPU
-            6. \[ \] Enable hardware encoding on AMD GPU
-            7. \[ \] Enable hardware encoding on Intel GPU
+            1. ✅ Change desktop resolution to match streaming client.
+            2. ⬜ Dynamically adjust capture resolution to improve client
+            3. ⬜ Use NVFBC capture on NVIDIA GPU
+            4. ✅ Enable hardware encoding
+            5. ✅ Enable hardware encoding on NVIDIA GPU
+            6. ⬜ Enable hardware encoding on AMD GPU
+            7. ⬜ Enable hardware encoding on Intel GPU
             8. Number of software encoding threads (Automatic)
-            9. \[√\] Prioritize network traffic
-    2. On the **Remote Play device:**
+            9. ✅ Prioritize network traffic
+    2. On the Remote Play device:
         1. Cogwheel Icon > Streaming > Customize > Enable Advanced Client Options
-            1. \[√\] Bandwidth limit = 40 MB/s
-            2. \[√\] Framerate limit = 60 FPS
-            3. \[ \] Hardware Decoding
-            4. \[√\] HEVC Video
-            5. \[√\] Low Latency Networking
+            1. ✅ Bandwidth limit = 40 MB/s
+            2. ✅ Framerate limit = 60 FPS
+            3. ⬜ Hardware Decoding
+            4. ✅ HEVC Video
+            5. ✅ Low Latency Networking
 13. It's time to initiate your first connection to your Amazon EC2 instance from your Remote Play device using the Steam Link app.
 _IMPORTANT_**:** Before beginning gameplay, ensure you disconnect your Remote Desktop Protocol (RDP) session. If you're using [AWS Systems Manager Fleet Manager](https://aws.amazon.com/systems-manager/fleet-manager/), simply navigate to Actions > End session. Alternatively, you can utilize the desktop shortcut on the server: `end_rdp_session`. Always follow above step when exiting your RDP session to maintain proper functionality.
 Next, launch the Steam Link app and click on the **Start Playing** button to begin your gaming session.
@@ -104,7 +104,7 @@ If you're using an ultra-wide monitor and your desired resolution, like 3440 x 1
 
 ## Conclusion
 
-In this blog post, we demonstrated how AWS can be leveraged as a cost-effective gaming solution, transforming your gaming experience without requiring significant investments in personal gaming hardware.
+We demonstrated how AWS can be leveraged as a cost-effective gaming solution, transforming your gaming experience without requiring significant investments in personal gaming hardware.
 
 Visit the Amazon EC2 G5 instances [service page](https://aws.amazon.com/ec2/instance-types/g5/) to learn more about how AWS continues to push the boundaries of cost-effectiveness for graphic-intensive applications.
 ## Security
@@ -113,5 +113,5 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more inform
 
 ## License
 
-This library is licensed under the MIT-0 License. See the LICENSE file.
+This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
 
